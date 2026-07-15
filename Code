@@ -1,0 +1,72 @@
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+from skimage import data, io, color, filters, measure, morphology
+from skimage.segmentation import clear_border
+
+
+if len(sys.argv) > 1:
+    img = io.imread(sys.argv[1])
+    print(f"read_image: {sys.argv[1]}  shape={img.shape}")
+else:
+    img = data.coins()  # ภาพเหรียญ 303x384 grayscale มากับ skimage
+    print(f"read_image: skimage sample 'coins'  shape={img.shape}")
+
+
+if img.ndim == 3:
+    gray = color.rgb2gray(img)          # ได้ float 0..1
+    gray = (gray * 255).astype(np.uint8)
+else:
+    gray = img
+print(f"rgb1_to_gray: dtype={gray.dtype}  min={gray.min()} max={gray.max()}")
+
+
+t = filters.threshold_otsu(gray)
+region = gray > t                       # boolean mask = "Region" ของ HALCON
+print(f"threshold: Otsu t={t}  region pixels={region.sum()}")
+
+# เก็บกวาดรูเล็กๆ (HALCON มักใช้ fill_up / opening_circle ช่วงนี้)
+region = morphology.remove_small_holes(region, 64)
+region = morphology.opening(region, morphology.disk(2))
+
+labels = measure.label(region, connectivity=2)
+region = clear_border(region)
+n_all = labels.max()
+print(f"connection: found {n_all} connected regions")
+
+
+MIN_AREA = 300
+MAX_AREA = 4000   # เหรียญปกติใหญ่สุด ~3105 — ก้อน 8765 คือผิดปกติแน่
+props = [p for p in measure.regionprops(labels)
+         if MIN_AREA <= p.area <= MAX_AREA]       # ปรับตามงานจริง — นี่คือ "parameter tuning" ที่วิศวกร vision ทำทุกวัน
+print(f"select_shape: {len(props)} regions pass area [{MIN_AREA}, {MAX_AREA}]")
+
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+axes[0].imshow(gray, cmap="gray")
+axes[0].set_title("Input (read_image)")
+axes[1].imshow(region, cmap="gray")
+axes[1].set_title(f"Region (threshold t={t})")
+axes[2].imshow(gray, cmap="gray")
+axes[2].set_title(f"select_shape: {len(props)} blobs")
+
+for p in props:
+    r0, c0, r1, c1 = p.bbox            # smallest_rectangle1
+    cy, cx = p.centroid                # area_center
+    rect = plt.Rectangle((c0, r0), c1 - c0, r1 - r0,
+                         fill=False, edgecolor="lime", linewidth=1.5)
+    axes[2].add_patch(rect)
+    axes[2].text(cx, cy, f"{p.area}", color="red",
+                 ha="center", va="center", fontsize=8)
+    print(f"  blob: area={int(p.area):5d}  center=({cy:.0f},{cx:.0f})  "
+          f"eccentricity={p.eccentricity:.2f}")
+
+for ax in axes:
+    ax.axis("off")
+plt.tight_layout()
+plt.savefig("blob_result.png", dpi=120)
+print("\nsaved: blob_result.png")
+plt.show()
+
+
+
