@@ -1,0 +1,118 @@
+"""
+Blob Inspection Pipeline — Python vs HALCON
+============================================
+เทียบ workflow แบบ region-based ของ HALCON กับ Python (NumPy + scikit-image)
+ทีละขั้น เพื่อเข้าใจ concept ก่อนได้ HALCON license จริง
+
+รันได้ทันที: python blob_inspection.py
+(ไม่ต้องมีภาพ — ใช้ภาพเหรียญตัวอย่างจาก scikit-image)
+หรือใช้ภาพตัวเอง: python blob_inspection.py path/to/image.png
+
+HALCON pipeline ที่เราจำลอง:
+    read_image -> rgb1_to_gray -> threshold -> connection
+    -> select_shape -> area_center -> smallest_rectangle1
+"""
+
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+from skimage import data, io, color, filters, measure, morphology
+from skimage.segmentation import clear_border
+
+# ---------------------------------------------------------------
+# STEP 1: read_image (Image, 'coins')
+# HALCON อ่านภาพเข้ามาเป็น object "Image"
+# Python: ได้ numpy array ตรงๆ — สิ่งเดียวกับที่ใช้ใน diffusion repo
+# ---------------------------------------------------------------
+if len(sys.argv) > 1:
+    img = io.imread(sys.argv[1])
+    print(f"read_image: {sys.argv[1]}  shape={img.shape}")
+else:
+    img = data.coins()  # ภาพเหรียญ 303x384 grayscale มากับ skimage
+    print(f"read_image: skimage sample 'coins'  shape={img.shape}")
+
+# ---------------------------------------------------------------
+# STEP 2: rgb1_to_gray (Image, GrayImage)
+# HALCON แปลงภาพสีเป็น gray ก่อน threshold เสมอ
+# ---------------------------------------------------------------
+if img.ndim == 3:
+    gray = color.rgb2gray(img)          # ได้ float 0..1
+    gray = (gray * 255).astype(np.uint8)
+else:
+    gray = img
+print(f"rgb1_to_gray: dtype={gray.dtype}  min={gray.min()} max={gray.max()}")
+
+# ---------------------------------------------------------------
+# STEP 3: threshold (GrayImage, Region, MinGray, 255)
+# หัวใจของ HALCON: threshold ไม่ได้คืน "ภาพ" แต่คืน "Region"
+# (เซตของ pixel ที่ผ่านเงื่อนไข) — ใน Python คือ boolean mask
+# ใช้ Otsu หา threshold อัตโนมัติ (HALCON มี binary_threshold ทำแบบเดียวกัน)
+# ---------------------------------------------------------------
+t = filters.threshold_otsu(gray)
+region = gray > t                       # boolean mask = "Region" ของ HALCON
+print(f"threshold: Otsu t={t}  region pixels={region.sum()}")
+
+# เก็บกวาดรูเล็กๆ (HALCON มักใช้ fill_up / opening_circle ช่วงนี้)
+region = morphology.remove_small_holes(region, 64)
+region = morphology.opening(region, morphology.disk(2))
+
+# ---------------------------------------------------------------
+# STEP 4: connection (Region, ConnectedRegions)
+# แยก region ก้อนเดียวออกเป็น connected components หลายก้อน
+# Python: measure.label ให้เลข id แต่ละก้อน
+# ---------------------------------------------------------------
+labels = measure.label(region, connectivity=2)
+region = clear_border(region)
+n_all = labels.max()
+print(f"connection: found {n_all} connected regions")
+
+# ---------------------------------------------------------------
+# STEP 5: select_shape (ConnectedRegions, SelectedRegions, 'area', 'and', Min, Max)
+# กรอง region ตามคุณสมบัติรูปร่าง — ตรงนี้คือพลังของ HALCON
+# Python: regionprops ให้ area, eccentricity, circularity ฯลฯ ครบ
+# ---------------------------------------------------------------
+MIN_AREA = 300
+MAX_AREA = 4000   # เหรียญปกติใหญ่สุด ~3105 — ก้อน 8765 คือผิดปกติแน่
+props = [p for p in measure.regionprops(labels)
+         if MIN_AREA <= p.area <= MAX_AREA]       # ปรับตามงานจริง — นี่คือ "parameter tuning" ที่วิศวกร vision ทำทุกวัน
+print(f"select_shape: {len(props)} regions pass area [{MIN_AREA}, {MAX_AREA}]")
+
+# ---------------------------------------------------------------
+# STEP 6: area_center + smallest_rectangle1
+# ดึงตัวเลขไปตัดสิน pass/fail — ปลายทางของทุก inspection
+# ---------------------------------------------------------------
+fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+axes[0].imshow(gray, cmap="gray")
+axes[0].set_title("Input (read_image)")
+axes[1].imshow(region, cmap="gray")
+axes[1].set_title(f"Region (threshold t={t})")
+axes[2].imshow(gray, cmap="gray")
+axes[2].set_title(f"select_shape: {len(props)} blobs")
+
+for p in props:
+    r0, c0, r1, c1 = p.bbox            # smallest_rectangle1
+    cy, cx = p.centroid                # area_center
+    rect = plt.Rectangle((c0, r0), c1 - c0, r1 - r0,
+                         fill=False, edgecolor="lime", linewidth=1.5)
+    axes[2].add_patch(rect)
+    axes[2].text(cx, cy, f"{p.area}", color="red",
+                 ha="center", va="center", fontsize=8)
+    print(f"  blob: area={int(p.area):5d}  center=({cy:.0f},{cx:.0f})  "
+          f"eccentricity={p.eccentricity:.2f}")
+
+for ax in axes:
+    ax.axis("off")
+plt.tight_layout()
+plt.savefig("blob_result.png", dpi=120)
+print("\nsaved: blob_result.png")
+plt.show()
+
+# ---------------------------------------------------------------
+# สรุปไว้พูดตอนสัมภาษณ์:
+# 1) HALCON คิดเป็น Region (เซต pixel) ไม่ใช่ array ทั้งภาพ
+#    -> ประหยัด memory และ operator ทำงานเฉพาะ region ที่สนใจ
+# 2) pipeline มาตรฐาน: acquire -> preprocess -> segment(threshold)
+#    -> connection -> select_shape -> measure -> decide
+# 3) งานจริงคือ tuning parameters (threshold, min area, lighting)
+#    ให้ robust กับ variation ของชิ้นงาน — ไม่ใช่เขียน algorithm ใหม่
+# ---------------------------------------------------------------
