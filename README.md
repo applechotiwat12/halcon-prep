@@ -10,5 +10,5 @@ built to understand region-based machine vision concepts.
 - Each step is commented with its HALCON operator equivalent
 - Found and fixed a merged-blob problem (uneven background) using
   border clearing + area filtering; local/adaptive threshold as root-cause fix
-![Uploading blob_result.png…]()
+![result](blob_result.png)
 *Stack: NumPy, scikit-image, Matplotlib*
