@@ -36,9 +36,9 @@ print(f"connection: found {n_all} connected regions")
 
 
 MIN_AREA = 300
-MAX_AREA = 4000   # เหรียญปกติใหญ่สุด ~3105 — ก้อน 8765 คือผิดปกติแน่
+MAX_AREA = 4000  
 props = [p for p in measure.regionprops(labels)
-         if MIN_AREA <= p.area <= MAX_AREA]       # ปรับตามงานจริง — นี่คือ "parameter tuning" ที่วิศวกร vision ทำทุกวัน
+         if MIN_AREA <= p.area <= MAX_AREA]     
 print(f"select_shape: {len(props)} regions pass area [{MIN_AREA}, {MAX_AREA}]")
 
 
